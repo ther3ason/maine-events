@@ -46,7 +46,8 @@ Built as a portfolio project demonstrating real-world Data Engineering skills: w
 | Cloud Storage | AWS S3 |
 | Infrastructure | Terraform >= 1.5 |
 | Serverless Compute | AWS Lambda (roadmap) |
-| Query Engine | Amazon Athena (roadmap) |
+| ETL / Cataloging | AWS Glue (ETL jobs + Crawler + Data Catalog) |
+| Query Engine | Amazon Athena |
 | CI/CD | GitHub Actions |
 | Testing | `pytest`, `pytest-cov` |
 | Linting | `flake8` |
@@ -56,7 +57,7 @@ Built as a portfolio project demonstrating real-world Data Engineering skills: w
 ## Project Structure
 
 ```
-portland-events-etl/
+maine-events/
 ├── .github/
 │   └── workflows/
 │       └── python-app.yml    # CI: lint + test on every push
@@ -93,8 +94,8 @@ portland-events-etl/
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/yourusername/portland-events-etl.git
-cd portland-events-etl
+git clone https://github.com/TheR3ason/maine-events.git
+cd maine-events
 
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -146,17 +147,28 @@ terraform apply -var="environment=dev"
 
 ---
 
-## Future Roadmap
+## Roadmap
 
+### Phase 1 — Scrapers (current)
+- [x] `BaseScraper` abstract class with retry logic
+- [x] `PortlandOldPort` scraper
 - [ ] **State Theatre scraper** — pull upcoming shows from `statetheatreportland.com`
 - [ ] **Thompson's Point scraper** — outdoor venue with seasonal concert series
 - [ ] **Maine Mariners schedule integration** — ECHL hockey game data via team API
 - [ ] **Portland Sea Dogs calendar** — Double-A baseball affiliate of the Red Sox
-- [ ] **AWS Lambda packaging** — containerise scrapers for scheduled cloud execution
-- [ ] **EventBridge trigger** — run pipeline nightly on a cron schedule
-- [ ] **Glue Crawler + Athena table** — queryable SQL interface over the Gold layer
-- [ ] **Streamlit dashboard** — local "What's on in Portland this weekend?" UI
 - [ ] **Duplicate detection** — fuzzy-match event names across venues
+
+### Phase 2 — AWS Loading
+- [ ] **S3 Bronze load** — write validated JSON from scrapers into `bronze/` prefix
+- [ ] **AWS Glue ETL job** — transform Bronze JSON → Silver Parquet (clean, deduplicate, type-cast)
+- [ ] **AWS Glue Crawler** — auto-discover schema and populate the Glue Data Catalog
+- [ ] **Amazon Athena** — serverless SQL queries over the Silver/Gold layers
+- [ ] **Glue job for Gold layer** — aggregate Silver into analytics-ready tables
+
+### Phase 3 — Orchestration & Automation
+- [ ] **AWS Lambda packaging** — containerise scrapers for scheduled cloud execution
+- [ ] **EventBridge trigger** — run full pipeline nightly on a cron schedule
+- [ ] **Streamlit dashboard** — local "What's on in Portland this weekend?" UI
 - [ ] **Slack / SMS alert** — notify when a high-demand event is added
 
 ---
