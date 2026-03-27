@@ -49,7 +49,6 @@ class Event(BaseModel):
         return v
 
     model_config = {
-        "json_encoders": {datetime: lambda dt: dt.isoformat()},
         "populate_by_name": True,
     }
 
