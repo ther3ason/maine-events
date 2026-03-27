@@ -1,166 +1,142 @@
 """
-Scraper for PortlandOldPort.com/events.
+Scraper for Portland Old Port events (portlandoldport.com).
 
-Targets the public events listing page and extracts upcoming events
-for the Old Port district of Portland, Maine.
+Uses The Events Calendar REST API (/wp-json/tribe/events/v1/events) rather
+than HTML scraping — the listing page renders via JavaScript AJAX and the
+site is behind Cloudflare, making the API a more reliable extraction path.
+
+Events titled "Happy Hour ..." are filtered out as low-signal noise.
 """
 
 import logging
-import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from html import unescape
 from typing import List, Optional
 
-from bs4 import BeautifulSoup, Tag
+import cloudscraper
 
-from src.extractors.base_scraper import BaseScraper
 from src.models import Event
 
 logger = logging.getLogger(__name__)
 
 VENUE_NAME = "Portland Old Port"
-BASE_URL = "https://portlandoldport.com/events"
+API_BASE = "https://www.portlandoldport.com/wp-json/tribe/events/v1/events"
+PER_PAGE = 50
+HAPPY_HOUR_FILTER = "happy hour"
+
+# Entertainment-relevant category IDs from The Events Calendar taxonomy.
+# Excludes high-volume noise categories (Happy Hour, Food & Drink specials, etc.)
+# IDs: Concert, Live Music, Live Entertainment, Music, Music Event, Live Show,
+#      Festival, Performance, Comedy Night, Drag Show, Theatre
+ENTERTAINMENT_CATEGORIES = "3962,3966,3828,3964,3967,4196,3883,3958,4392,4408,4218"
 
 
-class PortlandOldPortScraper(BaseScraper):
+class PortlandOldPortScraper:
     """
-    Scraper for the Portland Old Port events listing page.
+    Scraper for Portland Old Port events using The Events Calendar REST API.
 
-    The Old Port BID site renders events as article cards. Each card
-    typically contains: event title, date string, optional description,
-    and a detail/ticket link.
+    Fetches all upcoming events, one page at a time, and converts each
+    API response into a validated Event object.
     """
 
     def __init__(self):
-        super().__init__(base_url=BASE_URL)
-
-    def parse(self, html: str) -> List[Event]:
-        """
-        Parses the Old Port events page HTML into Event objects.
-
-        Args:
-            html: Raw HTML string from portlandoldport.com/events.
-
-        Returns:
-            A list of validated Event instances.
-        """
-        soup = BeautifulSoup(html, "html.parser")
-        events: List[Event] = []
-
-        # The Old Port site uses article/card elements for each event.
-        # Selectors are intentionally broad to survive minor template changes.
-        event_cards = (
-            soup.select("article.event")
-            or soup.select(".event-card")
-            or soup.select(".tribe-events-calendar-list__event")
-            or soup.select("article")
-        )
-
-        if not event_cards:
-            logger.warning(
-                "No event cards found on %s — the page structure may have changed.",
-                self.base_url,
+        # cloudscraper handles Cloudflare's JS challenge transparently
+        self.session = cloudscraper.create_scraper()
+        self.session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (compatible; PortlandEventsBot/1.0; "
+                "+https://github.com/TheR3ason/maine-events)"
             )
-            return events
+        })
 
-        for card in event_cards:
-            event = self._parse_card(card)
-            if event:
-                events.append(event)
+    def run(self) -> List[Event]:
+        """Fetches all upcoming events from the API across all pages."""
+        all_events: List[Event] = []
+        page = 1
+        today = date.today().isoformat()
 
-        return events
+        while True:
+            params = {
+                "per_page": PER_PAGE,
+                "page": page,
+                "status": "publish",
+                "start_date": today,
+                "categories": ENTERTAINMENT_CATEGORIES,
+            }
 
-    def _parse_card(self, card: Tag) -> Optional[Event]:
-        """Extracts a single Event from an HTML card element."""
+            try:
+                response = self.session.get(API_BASE, params=params, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+            except Exception as exc:
+                logger.error("API request failed on page %d: %s", page, exc)
+                break
+
+            raw_events = data.get("events", [])
+            if not raw_events:
+                break
+
+            for raw in raw_events:
+                event = self._parse_event(raw)
+                if event:
+                    all_events.append(event)
+
+            total_pages = data.get("total_pages", 1)
+            logger.info("Page %d/%d — %d events collected so far", page, total_pages, len(all_events))
+
+            if page >= total_pages:
+                break
+            page += 1
+
+        logger.info("PortlandOldPortScraper extracted %d events", len(all_events))
+        return all_events
+
+    def _parse_event(self, raw: dict) -> Optional[Event]:
+        """Converts a single API event dict into an Event model, or None if filtered."""
         try:
-            event_name = self._extract_title(card)
-            if not event_name:
-                logger.debug("Skipping card with no title: %s", card.get("class"))
+            title = unescape(raw.get("title", "")).strip()
+            if not title:
                 return None
 
-            date_iso = self._extract_date(card)
-            ticket_link = self._extract_link(card)
-            description = self._extract_description(card)
+            if HAPPY_HOUR_FILTER in title.lower():
+                logger.debug("Filtered out happy hour event: %s", title)
+                return None
+
+            venue_name = unescape(
+                raw.get("venue", {}).get("venue", VENUE_NAME)
+            ).strip() or VENUE_NAME
 
             return Event(
-                event_name=event_name,
-                venue_name=VENUE_NAME,
-                date_iso=date_iso,
-                ticket_link=ticket_link,
-                source_url=self.base_url,
+                event_name=title,
+                venue_name=venue_name,
+                date_iso=raw.get("start_date", ""),
+                ticket_link=raw.get("website") or None,
+                source_url=raw.get("url") or API_BASE,
                 scraped_at_timestamp=datetime.now(timezone.utc),
-                description=description,
+                description=self._extract_description(raw),
             )
         except Exception as exc:
-            logger.warning("Failed to parse event card: %s", exc)
+            logger.warning("Failed to parse event %r: %s", raw.get("title"), exc)
             return None
 
-    # ------------------------------------------------------------------
-    # Private extraction helpers
-    # ------------------------------------------------------------------
-
-    def _extract_title(self, card: Tag) -> Optional[str]:
-        """Returns the event title from the card, trying common selectors."""
-        for selector in [
-            "h2.event-title",
-            "h3.event-title",
-            ".tribe-event-url",
-            "h2 a",
-            "h3 a",
-            "h2",
-            "h3",
-        ]:
-            el = card.select_one(selector)
-            if el and el.get_text(strip=True):
-                return el.get_text(strip=True)
+    def _extract_description(self, raw: dict) -> Optional[str]:
+        excerpt = raw.get("excerpt", "").strip()
+        if excerpt:
+            return excerpt[:300] + "…" if len(excerpt) > 300 else excerpt
         return None
 
-    def _extract_date(self, card: Tag) -> str:
-        """
-        Returns a date string, preferring machine-readable datetime attributes.
-        Falls back to text content, then an empty string.
-        """
-        # Many WordPress/The Events Calendar themes use <abbr> or <time> with datetime attr
-        for selector in ["abbr.tribe-events-abbr", "time", ".tribe-event-date-start"]:
-            el = card.select_one(selector)
-            if el:
-                dt_attr = el.get("datetime") or el.get("title")
-                if dt_attr:
-                    return str(dt_attr)
-                if el.get_text(strip=True):
-                    return el.get_text(strip=True)
 
-        # Regex fallback: look for date-like strings in the card text
-        text = card.get_text(" ", strip=True)
-        match = re.search(
-            r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
-            r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
-            r"Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}\b",
-            text,
-            re.IGNORECASE,
-        )
-        if match:
-            return match.group(0)
+if __name__ == "__main__":
+    import json
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s — %(message)s")
 
-        logger.debug("Could not extract date from card; defaulting to empty string.")
-        return ""
+    scraper = PortlandOldPortScraper()
+    events = scraper.run()
 
-    def _extract_link(self, card: Tag) -> Optional[str]:
-        """Returns the first absolute href found in the card."""
-        for selector in [".tribe-event-url", "a[href]"]:
-            el = card.select_one(selector)
-            if el and el.get("href"):
-                href = str(el["href"])
-                if href.startswith("http"):
-                    return href
-                if href.startswith("/"):
-                    return f"https://portlandoldport.com{href}"
-        return None
-
-    def _extract_description(self, card: Tag) -> Optional[str]:
-        """Returns a short description/excerpt if present."""
-        for selector in [".tribe-events-calendar-list__event-description", ".excerpt", "p"]:
-            el = card.select_one(selector)
-            if el and el.get_text(strip=True):
-                text = el.get_text(strip=True)
-                return text[:300] + "…" if len(text) > 300 else text
-        return None
+    if not events:
+        print("\nNo events returned — the API may be unavailable.")
+    else:
+        print(f"\nFound {len(events)} event(s). Showing first 3:\n")
+        for event in events[:3]:
+            print(json.dumps(event.to_s3_dict(), indent=2))
+            print("-" * 60)
