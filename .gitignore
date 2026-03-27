@@ -93,6 +93,7 @@ data/raw/*.parquet
 # ============================================================
 .idea/
 .vscode/
+!.vscode/launch.json
 *.swp
 *.swo
 *~
