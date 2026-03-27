@@ -1,16 +1,16 @@
 """
 Ticketmaster Discovery API v2 scraper.
 
-Fetches upcoming events for a given venue by:
-  1. Looking up the venue's Ticketmaster ID via /venues
-  2. Querying /events filtered by that venue ID
+Fetches all upcoming ticketed events in Portland, ME across all venues.
+Venue name is pulled directly from the API response on each event.
 
-Requires a TICKETMASTER_API_KEY environment variable.
+Requires TICKETMASTER_API_KEY environment variable.
 Register for a free key at https://developer.ticketmaster.com/
 
 Rate limits: 5,000 calls/day, 5 requests/second.
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -29,27 +29,15 @@ PAGE_SIZE = 50
 
 
 class TicketmasterScraper:
-    """
-    Fetches events for a specific venue from the Ticketmaster Discovery API.
+    """Fetches all upcoming events in Portland, ME from the Ticketmaster Discovery API."""
 
-    Args:
-        venue_name:  Venue name as it appears on Ticketmaster (used for lookup).
-        city:        City name to narrow the venue search.
-        state_code:  Two-letter US state code (default: ME).
-    """
-
-    def __init__(self, venue_name: str, city: str = "Portland", state_code: str = "ME"):
-        self.venue_name = venue_name
-        self.city = city
-        self.state_code = state_code
+    def __init__(self):
         self.api_key = os.getenv("TICKETMASTER_API_KEY")
-
         if not self.api_key:
             raise EnvironmentError(
                 "TICKETMASTER_API_KEY is not set. "
-                "Copy .env.example to .env and add your key."
+                "Copy .env.example to .env and add your Consumer Key."
             )
-
         self.session = self._build_session()
 
     def _build_session(self) -> requests.Session:
@@ -64,65 +52,26 @@ class TicketmasterScraper:
         response.raise_for_status()
         return response.json()
 
-    # ------------------------------------------------------------------
-    # Venue ID lookup
-    # ------------------------------------------------------------------
-
-    def get_venue_id(self) -> Optional[str]:
-        """
-        Resolves the Ticketmaster venue ID for self.venue_name.
-
-        Returns the ID of the first matching venue, or None if not found.
-        """
-        logger.info("Looking up Ticketmaster venue ID for '%s'", self.venue_name)
-        try:
-            data = self._get("/venues", {
-                "keyword": self.venue_name,
-                "city": self.city,
-                "stateCode": self.state_code,
-                "countryCode": "US",
-            })
-        except requests.RequestException as exc:
-            logger.error("Venue lookup failed: %s", exc)
-            return None
-
-        venues = data.get("_embedded", {}).get("venues", [])
-        if not venues:
-            logger.warning("No Ticketmaster venue found for '%s'", self.venue_name)
-            return None
-
-        venue_id = venues[0]["id"]
-        logger.info("Resolved '%s' -> venue ID %s", self.venue_name, venue_id)
-        return venue_id
-
-    # ------------------------------------------------------------------
-    # Event fetching
-    # ------------------------------------------------------------------
-
     def run(self) -> List[Event]:
-        """Fetches all upcoming events for the venue."""
-        venue_id = self.get_venue_id()
-        if not venue_id:
-            return []
-
+        """Fetches all upcoming Portland, ME events across all venues."""
         all_events: List[Event] = []
         page = 0
 
         while True:
             try:
                 data = self._get("/events", {
-                    "venueId": venue_id,
+                    "city": "Portland",
+                    "stateCode": "ME",
+                    "countryCode": "US",
                     "size": PAGE_SIZE,
                     "page": page,
                     "sort": "date,asc",
-                    "countryCode": "US",
                 })
             except requests.RequestException as exc:
                 logger.error("Events request failed on page %d: %s", page, exc)
                 break
 
-            embedded = data.get("_embedded", {})
-            raw_events = embedded.get("events", [])
+            raw_events = data.get("_embedded", {}).get("events", [])
             if not raw_events:
                 break
 
@@ -133,24 +82,14 @@ class TicketmasterScraper:
 
             page_info = data.get("page", {})
             total_pages = page_info.get("totalPages", 1)
-            logger.info(
-                "Page %d/%d — %d events collected",
-                page + 1, total_pages, len(all_events)
-            )
+            logger.info("Page %d/%d — %d events collected", page + 1, total_pages, len(all_events))
 
             if page + 1 >= total_pages:
                 break
             page += 1
 
-        logger.info(
-            "%s extracted %d events for '%s'",
-            self.__class__.__name__, len(all_events), self.venue_name,
-        )
+        logger.info("TicketmasterScraper extracted %d events", len(all_events))
         return all_events
-
-    # ------------------------------------------------------------------
-    # Parsing
-    # ------------------------------------------------------------------
 
     def _parse_event(self, raw: dict) -> Optional[Event]:
         try:
@@ -161,16 +100,12 @@ class TicketmasterScraper:
             venue_name = (
                 raw.get("_embedded", {})
                    .get("venues", [{}])[0]
-                   .get("name", self.venue_name)
+                   .get("name", "Unknown Venue")
             )
 
             date_iso = (
-                raw.get("dates", {})
-                   .get("start", {})
-                   .get("dateTime")
-                or raw.get("dates", {})
-                   .get("start", {})
-                   .get("localDate", "")
+                raw.get("dates", {}).get("start", {}).get("dateTime")
+                or raw.get("dates", {}).get("start", {}).get("localDate", "")
             )
 
             return Event(
@@ -193,10 +128,24 @@ class TicketmasterScraper:
             return None
         pr = price_ranges[0]
         low, high = pr.get("min"), pr.get("max")
-        currency = pr.get("currency", "USD")
-        symbol = "$" if currency == "USD" else currency
+        symbol = "$"
         if low and high:
             return f"{symbol}{low:.0f} - {symbol}{high:.0f}"
         if low:
             return f"From {symbol}{low:.0f}"
         return None
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s — %(message)s")
+
+    scraper = TicketmasterScraper()
+    events = scraper.run()
+
+    if not events:
+        print("\nNo events returned.")
+    else:
+        print(f"\nFound {len(events)} event(s). Showing first 3:\n")
+        for event in events[:3]:
+            print(json.dumps(event.to_s3_dict(), indent=2))
+            print("-" * 60)
