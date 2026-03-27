@@ -1,0 +1,98 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+.Python
+env/
+venv/
+.venv/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints
+
+# ============================================================
+# Terraform
+# ============================================================
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# ============================================================
+# AWS / credentials
+# ============================================================
+.aws/
+*.pem
+*.key
+credentials
+
+# ============================================================
+# Environment / secrets
+# ============================================================
+.env
+.env.*
+*.secret
+
+# ============================================================
+# Data (raw scraped files — tracked only if intentional)
+# ============================================================
+data/raw/*.json
+data/raw/*.csv
+data/raw/*.parquet
+
+# ============================================================
+# macOS
+# ============================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# ============================================================
+# IDEs
+# ============================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
